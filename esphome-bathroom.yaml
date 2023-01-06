@@ -95,9 +95,9 @@ ble_client:
       then:
         lambda: |- 
           auto time = id(homeassistant_time).now();
-          dsh.tStartTime = time.timestamp;  // Set start time of shower
           // Only reset counters when a new shower being started - as it can have paused (shower head 2 min inactivity allowed)
           if(dsh.occupancy == 0) { 
+            dsh.tStartTime = time.timestamp;  // Set start time of shower
             id(dsh_lastShowerkWh).publish_state(0);
             id(dsh_lastShowerTemp).publish_state(0);
             id(dsh_lastShowerLiter).publish_state(0);
