@@ -10,7 +10,11 @@ esphome:
     - oras_dsh.h   # File is included in order to manage "global" data between the different sections of lambda code
 
 # Enable logging
+# If using DEBUG level, the BLE tracker will find MAC addresses and service uuid's of any digital shower heads, it can find
+# INFO will include information on when shower head is connect/disconnected, BLE datablock changes and the update timestamp for the last datablock change
+# WARN will just log information about start time and end time (and relevant info for time calculation)
 logger:
+  level: INFO
 
 # Enable Home Assistant API
 api:
@@ -26,7 +30,7 @@ wifi:
 
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
-    ssid: "Ble-Test Fallback Hotspot"
+    ssid: "DSH Fallback Hotspot"
     password: "ecEm5NbuUFfg"
 
 captive_portal:
@@ -49,9 +53,85 @@ text_sensor:
     ssid:
       name: '${friendly_name} - Connected SSID'
       icon: mdi:wifi-strength-2
-      
-esp32_ble_tracker:
+  - platform: template
+    name: "dsh_lastShowerFinished"
+    id: dsh_lastShowerFinished
+    icon: mdi:calendar-clock
+    update_interval: never
 
+
+esp32_ble_tracker:
+  scan_parameters:
+    interval: 1100ms
+    window: 1100ms
+    active: true
+
+
+  on_ble_advertise:
+    - then:
+      - lambda: |-
+          char stringbuf[256];                             // Buffer for outputting raw data in a readable format               
+          char* buf2 = stringbuf;                          // Pointer for buffer
+          char* endofbuf = stringbuf + sizeof(stringbuf);  // Pointer to end of buffer
+          int i;                                           // integer to be sued for counter
+
+          if(strcmp(x.get_name().c_str(),"DHS") == 0) {    // Check manufacturer name
+            ESP_LOGI("DSH_tracker", "New BLE device");
+            ESP_LOGI("DSH_tracker", "  address: %s", x.address_str().c_str());
+            ESP_LOGI("DSH_tracker", "(%s)  name: %s", x.address_str().c_str(), x.get_name().c_str());
+            ESP_LOGI("DSH_tracker", "(%s)  Advertised service UUIDs:",x.address_str().c_str());
+            for (auto uuid : x.get_service_uuids()) {
+                ESP_LOGI("DSH_tracker", "(%s)    - %s", x.address_str().c_str(), uuid.to_string().c_str());
+            }
+            ESP_LOGI("DSH", "(%s)  Advertised service data:",x.address_str().c_str());
+            for (auto data : x.get_service_datas()) {
+                ESP_LOGI("DSH_tracker", "(%s)    - %s: (length %i)", x.address_str().c_str(), data.uuid.to_string().c_str(), data.data.size());
+            }
+            ESP_LOGI("DSH_tracker", "(%s)  Advertised manufacturer data:",x.address_str().c_str());
+            for (auto data : x.get_manufacturer_datas()) {
+              ESP_LOGI("DSH_tracker", "(%s)    - %s: (length %i)", x.address_str().c_str(), data.uuid.to_string().c_str(), data.data.size());
+              for(i=0;i<18;i++) {
+                if (buf2 + 5 < endofbuf) {
+                    if (i > 0) {
+                        buf2 += sprintf(buf2, ":");
+                    }
+                  buf2 += sprintf(buf2, "%02X", data.data[i]);                  
+                }
+              }
+              ESP_LOGI("DSH_tracker", "(%s) Data block: %s", x.address_str().c_str(), (char*)stringbuf);
+
+              // Detailed analysis of data - check if shower head is active (only works before connection is established with ble_client)
+              if ( dsh.occupancy == 0 && data.data[14]==0x32 && data.data[15]==0x4F) {   // Enhance filtering on data - to ensure correct match
+                auto time = id(homeassistant_time).now();        // Get current time
+                time_t currTime = time.timestamp;
+
+                unsigned long int totShowers = data.data[2];         // Total Showers consist of index 1 and 2 in the array
+                unsigned long int bathTemp =  data.data[11];         // Temperature consist of index 11 in the array
+                unsigned long int bathKwhDec= data.data[13];         // kWh consumptionm consist of index 12 and 13 in the array (multiplied by 100)
+                unsigned long int bathLiter =  data.data[9];         // L consumptionm consist of index 8 and 9 in the array (multiplied by 100)
+
+                dsh.tStartTime = time.timestamp;  // Set start time of shower
+                ESP_LOGW("DSH_tracker", "Initializing start time to: %ld and setting occupancy on",time.timestamp);
+                dsh.occupancy =1 ;
+
+                totShowers += ( data.data[1]<<8);                   // Calculate shower number
+                dsh.lCurrentShowerNo = totShowers;
+                dsh.curBathTemp = bathTemp;
+                bathKwhDec += ( data.data[12]<<8);                  // Get data for energy (16 bit number) - number must be divided by 100
+                dsh.curEnergy = (float)bathKwhDec/100;
+                bathLiter += ( data.data[8]<<8);                    // Get amount of water (16 bit number) - number must be divided by 10
+                dsh.curWaterLiters = float(bathLiter)/10;
+                if(memcmp(&dsh.bleData[0],&data.data[0],18)!=0) {   // If BLE data is different than what we have in the "cache", copy the new data
+                  memcpy(&dsh.bleData[0],&data.data[0],18);     
+                }
+                ESP_LOGI("DSH_tracker", "Data block changes since last: %s", (char*)stringbuf);
+                dsh.tLastUpdate = time.timestamp;                   // Set information about when data was last updated
+                ESP_LOGI("DSH_tracker", "Timestamp for last update set to: %ld",time.timestamp);
+                strftime(dsh.szLastShowerEnded, sizeof(dsh.szLastShowerEnded), "%Y-%m-%d %H:%M:%S", localtime(&currTime));
+              }
+            }
+          }
+          
 # Timer running  on 5 sec interval - to ensure fairly quickly updates once the shower is active
 interval:
   - interval: 5sec
@@ -59,54 +139,58 @@ interval:
       - lambda: |-
           // Get current time
           auto time = id(homeassistant_time).now();
-          ESP_LOGI("ble_adv", "Interval timer spawned");
-          if ( (time.timestamp - dsh.tLastUpdate) > 120 && dsh.tLastUpdate != 0 ) {   // More than 120 seconds has passed since last update
+          // ESP_LOGW("DSH", "Interval timer spawned");
+          if ( (time.timestamp - dsh.tLastUpdate) > 180 && dsh.tLastUpdate != 0 ) {   // More than 180 seconds has passed since last update, assume finished
             unsigned long int showerDurationSecs = dsh.tLastUpdate - dsh.tStartTime;  // Calculate shower duration
             dsh.occupancy = 0;  // Set variable for shower as inactive
-            ESP_LOGI("ble_adv", "2 minutes has passed since last updated - shower duration in seconds: %ld",showerDurationSecs);
-            // Publish sensors to HA
-            id(dsh_lastShowerkWh).publish_state(dsh.totEnergy); 
-            id(dsh_lastShowerTemp).publish_state(dsh.bathTemp);
-            id(dsh_lastShowerLiter).publish_state(dsh.totWaterLiters);
-            id(dsh_lastShowerM3).publish_state((float)dsh.totWaterLiters*0.001);
-            id(dsh_showertime).publish_state(showerDurationSecs);
+            ESP_LOGI("DSH", "3 minutes has passed since last updated - shower duration in seconds has been calculated to: %ld seconds",showerDurationSecs);
+            // Publish LastShower sensors to HA
+            id(dsh_lastShowerkWh).publish_state(dsh.curEnergy); 
+            id(dsh_lastShowerTemp).publish_state(dsh.curBathTemp);
+            id(dsh_lastShowerLiter).publish_state(dsh.curWaterLiters);
+            id(dsh_lastShowerM3).publish_state((float)dsh.curWaterLiters*0.001);
+            id(dsh_lastDurationSeconds).publish_state(showerDurationSecs);
             id(dsh_showerOccupied).publish_state(dsh.occupancy);
+            id(dsh_lastShowerFinished).publish_state(dsh.szLastShowerEnded);
+            // Update internal variables for historical lookup
+            dsh.lastWaterLiters=dsh.curWaterLiters;
+            dsh.lastEnergy=dsh.curEnergy;
+            dsh.lastBathTemp=dsh.curBathTemp;
+            dsh.lastShowerDuration=showerDurationSecs;
+            // Set CurrentShower to NaN - as shower is inactive
+            id(dsh_curShowerkWh).publish_state(NAN); 
+            id(dsh_curShowerTemp).publish_state(NAN);
+            id(dsh_curShowerLiter).publish_state(NAN);
+            id(dsh_curShowerM3).publish_state(NAN);
+            id(dsh_curShowerTimeSeconds).publish_state(NAN);
+
             // Reset internal counters and data
+            ESP_LOGI("DSH", "Consider shower to be finished and reset Occupancy");
             dsh.tLastUpdate = 0;
-            dsh.tStartTime = 0;
-          }
-          // Regular updates every 5 seconds when shower is on
-          // Only send if more than 10 seconds since last update from BLE device
-          if ( (time.timestamp - dsh.tStartTime) > 10 && dsh.tStartTime != 0 && dsh.occupancy==1 && dsh.tLastUpdate != 0) { 
-              unsigned long int showerDurationSecs = dsh.tLastUpdate - dsh.tStartTime;  // Calculate shower duration
-              id(dsh_lastShowerkWh).publish_state(dsh.totEnergy);
-              id(dsh_lastShowerTemp).publish_state(dsh.bathTemp);
-              id(dsh_lastShowerLiter).publish_state(dsh.totWaterLiters);
-              id(dsh_lastShowerM3).publish_state((float)dsh.totWaterLiters*0.001);
-              id(dsh_showertime).publish_state(showerDurationSecs);
-              id(dsh_showerOccupied).publish_state(dsh.occupancy);
+            dsh.lLastShowerNo = dsh.lCurrentShowerNo;  // Set counter shower number - to be able to identify if current shower continues
+          } else if ( dsh.tStartTime != 0 && dsh.occupancy==1 && dsh.tLastUpdate != 0) { 
+            // Regular updates every 5 seconds when shower is on
+            // Only send if more than 10 seconds since last update from BLE device
+            unsigned long int showerDurationSecs = dsh.tLastUpdate - dsh.tStartTime;  // Calculate shower duration
+            ESP_LOGW("DSH", "Updating HA sensors ... ");
+            id(dsh_curShowerkWh).publish_state(dsh.curEnergy);
+            id(dsh_curShowerTemp).publish_state(dsh.curBathTemp);
+            id(dsh_curShowerLiter).publish_state(dsh.curWaterLiters);
+            id(dsh_curShowerM3).publish_state((float)dsh.curWaterLiters*0.001);
+            id(dsh_curShowerTimeSeconds).publish_state(showerDurationSecs);
+            id(dsh_showerOccupied).publish_state(dsh.occupancy);
+            id(dsh_totShowers).publish_state(dsh.lCurrentShowerNo);
           }
 
 
 ble_client:
-  - mac_address: 60:77:71:3A:D6:BB # Address needs to match shower head
+  - mac_address: 60:77:71:3A:D6:BB # Address needs to match shower head - 60:77:71:3A:D6:BB
     id: DSH
     on_connect:
       then:
         lambda: |- 
           auto time = id(homeassistant_time).now();
-          // Only reset counters when a new shower being started - as it can have paused (shower head 2 min inactivity allowed)
-          if(dsh.occupancy == 0) { 
-            dsh.tStartTime = time.timestamp;  // Set start time of shower
-            id(dsh_lastShowerkWh).publish_state(0);
-            id(dsh_lastShowerTemp).publish_state(0);
-            id(dsh_lastShowerLiter).publish_state(0);
-            id(dsh_lastShowerM3).publish_state(0);
-            id(dsh_showertime).publish_state(NAN);
-            memset(&dsh.bleData[0],0,sizeof(dsh.bleData));
-          }
-          dsh.occupancy = 1;                                    // Set shower as active/occupied
-          id(dsh_showerOccupied).publish_state(dsh.occupancy);  // Publish sensor to HA
+          ESP_LOGI("DSH", "Shower head connected ...");
 
     on_disconnect:
       then:
@@ -114,6 +198,7 @@ ble_client:
           // In principle a disconnect only means that the shower head disabled BLE - it does not mean, that the shower is finished,
           // as there is a 2 minute timeout in the shower head
           auto time = id(homeassistant_time).now();
+          ESP_LOGI("DSH", "Shower head disconnected - if no new data has been received after approx 3 minutes, the shower is considered finished");
 
 # Sensor to indicate whether the shower is busy/occupied or not.
 binary_sensor:
@@ -131,10 +216,17 @@ sensor:
     icon: 'mdi:speedometer-medium'
     unit_of_measurement: "#"
     update_interval: never
-    filters:
-      - filter_out: nan
 
-  # Current (or last) temperature
+  # Current temperature
+  - platform: template
+    name: "dsh_curShowerTemp"
+    id: dsh_curShowerTemp
+    icon: 'mdi:thermometer'
+    device_class: temperature
+    update_interval: never
+    unit_of_measurement: "°C"
+
+  # Previous temperature
   - platform: template
     name: "dsh_lastShowerTemp"
     id: dsh_lastShowerTemp
@@ -142,10 +234,18 @@ sensor:
     device_class: temperature
     update_interval: never
     unit_of_measurement: "°C"
-    filters:
-      - filter_out: nan
 
-  # Current/last energy usage in kwH
+  # Current energy usage in kwH
+  - platform: template
+    name: "dsh_curShowerkWh"
+    id: dsh_curShowerkWh
+    device_class: energy
+    icon: 'mdi:water-thermometer'
+    accuracy_decimals: 2
+    unit_of_measurement: "kWh"
+    update_interval: never
+
+  # Current energy usage in kwH
   - platform: template
     name: "dsh_lastShowerkWh"
     id: dsh_lastShowerkWh
@@ -154,20 +254,34 @@ sensor:
     accuracy_decimals: 2
     unit_of_measurement: "kWh"
     update_interval: never
-    filters:
-      - filter_out: nan
 
-  # Current/last duration 
+  # Current duration 
   - platform: template
-    name: "dsh_ShowerTimeSeconds"
-    id: dsh_showertime
+    name: "dsh_curShowerTimeSeconds"
+    id: dsh_curShowerTimeSeconds
     icon: 'mdi:timer'
     unit_of_measurement: "s"
     update_interval: never
-    filters:
-      - filter_out: nan
 
-  # Current/last water consumption in Liter
+  # Last duration 
+  - platform: template
+    name: "dsh_lastDurationSeconds"
+    id: dsh_lastDurationSeconds
+    icon: 'mdi:timer'
+    unit_of_measurement: "s"
+    update_interval: never
+
+  # Current water consumption in Liter
+  - platform: template
+    name: "dsh_curShowerLiter"
+    id: dsh_curShowerLiter
+    device_class: water
+    icon: 'mdi:water'
+    unit_of_measurement: "L"
+    accuracy_decimals: 1
+    update_interval: never
+
+  # Last water consumption in Liter
   - platform: template
     name: "dsh_lastShowerLiter"
     id: dsh_lastShowerLiter
@@ -176,10 +290,18 @@ sensor:
     unit_of_measurement: "L"
     accuracy_decimals: 1
     update_interval: never
-    filters:
-      - filter_out: nan
 
-  # Current/last water consumption in m³
+  # Current water consumption in m³
+  - platform: template
+    name: "dsh_curShowerM3"
+    id: dsh_curShowerM3
+    device_class: water
+    icon: 'mdi:cup-water'
+    unit_of_measurement: "m³"
+    accuracy_decimals: 5
+    update_interval: never
+
+  # Last water consumption in m³
   - platform: template
     name: "dsh_lastShowerM3"
     id: dsh_lastShowerM3
@@ -188,8 +310,6 @@ sensor:
     unit_of_measurement: "m³"
     accuracy_decimals: 5
     update_interval: never
-    filters:
-      - filter_out: nan
 
   # Total number of showers - this is where the magic happens
   - platform: ble_client
@@ -206,12 +326,11 @@ sensor:
        then:
         lambda: |-
           // `x` is only a single byte here :(
-          ESP_LOGD("ble_client_lambda", "got notify");
-          // uint8_t* pdata = (uint8_t*)x;
-          // unsigned long int notifyShowersTotal = pdata[2];
+          ESP_LOGD("DSH", "Client lambda got notify");
 
     lambda: |-
       auto time = id(homeassistant_time).now();        // Get current time
+      time_t currTime = time.timestamp;                // Struct to generate human readable date/timestamp
       char stringbuf[256];                             // Buffer for outputting raw data in a readable format               
       char* buf2 = stringbuf;                          // Pointer for buffer
       char* endofbuf = stringbuf + sizeof(stringbuf);  // Pointer to end of buffer
@@ -220,21 +339,37 @@ sensor:
       unsigned long int totShowers = pdata[2];         // Total Showers consist of index 1 and 2 in the array
       unsigned long int bathTemp =  pdata[11];         // Temperature consist of index 11 in the array
       unsigned long int bathKwhDec= pdata[13];         // kWh consumptionm consist of index 12 and 13 in the array (multiplied by 100)
-      unsigned long int bathLiter =  pdata[9];         // L consumptionm consist of index 8 and 9 in the array (multiplied by 100)
+      unsigned long int bathLiter =  pdata[9];         // L consumptionm consist of index 8 and 9 in the array (multiplied by 10)
 
       totShowers += ( pdata[1]<<8);
-      // ESP_LOGI("ble_adv", "Total showers %ld", totShowers);
+      // ESP_LOGD("ble_adv", "Total showers %ld", totShowers);
+      dsh.lCurrentShowerNo = totShowers;
 
-      dsh.bathTemp = bathTemp;
-      // ESP_LOGI("ble_adv", "Bath temperature %ld", dsh.bathTemp);
+      // Only reset counters when a new shower being started - as it can have paused. This can be identified by the shower number 
+      // retrieved from the BLE data
+      if(dsh.occupancy == 0 && dsh.lLastShowerNo != dsh.lCurrentShowerNo) { 
+        dsh.tStartTime = time.timestamp;  // Set start time of shower
+        ESP_LOGW("DSH", "Initializing start time to: %ld and setting occupancy on",time.timestamp);
+        id(dsh_curShowerkWh).publish_state(0);
+        id(dsh_curShowerTemp).publish_state(0);
+        id(dsh_curShowerLiter).publish_state(0);
+        id(dsh_curShowerM3).publish_state(0);
+        id(dsh_curShowerTimeSeconds).publish_state(0);
+        memset(&dsh.bleData[0],0,sizeof(dsh.bleData));        // Zeroize data block buffer
+        dsh.occupancy = 1;                                    // Set shower as active/occupied
+        id(dsh_showerOccupied).publish_state(dsh.occupancy);  // Publish sensor to HA
+      }
+
+      dsh.curBathTemp = bathTemp;
+      // ESP_LOGD("ble_adv", "Bath temperature %ld", dsh.curBathTemp);
 
       bathKwhDec += ( pdata[12]<<8);
-      dsh.totEnergy = (float)bathKwhDec/100;
-      // ESP_LOGI("ble_adv", "Bath Energy %f kWh", dsh.totEnergy);
+      dsh.curEnergy = (float)bathKwhDec/100;
+      // ESP_LOGD("ble_adv", "Bath Energy %f kWh", dsh.curEnergy);
 
       bathLiter += ( pdata[8]<<8);
-      dsh.totWaterLiters = float(bathLiter)/10;
-      // ESP_LOGI("ble_adv", "Bath water consumption %f L", dsh.totWaterLiters);
+      dsh.curWaterLiters = float(bathLiter)/10;
+      // ESP_LOGD("ble_adv", "Bath water consumption %f L", dsh.curWaterLiters);
 
       // Find out if data has changed compared to previous notification
       if(memcmp(&dsh.bleData[0],pdata,18)!=0) {
@@ -249,10 +384,12 @@ sensor:
             buf2 += sprintf(buf2, "%02X", pdata[i]);                  
           }
         }
-        ESP_LOGI("ble_adv", "Data block changes since last: %s", (char*)stringbuf);
-        ESP_LOGI("ble_adv", "Setting timestamp for last update");
+        ESP_LOGI("DSH", "Data block changes since last: %s", (char*)stringbuf);
         // Set information about when data was last updated
         dsh.tLastUpdate = time.timestamp;
+        ESP_LOGI("DSH", "Timestamp for last update set to: %ld",time.timestamp);
+        strftime(dsh.szLastShowerEnded, sizeof(dsh.szLastShowerEnded), "%Y-%m-%d %H:%M:%S", localtime(&currTime));
+        // sprintf((char *)dsh.szLastShowerEnded, "%04d-%02d-%02d %02d:%02d:%02d", time.year,time.month,time.day_of_month,time.hour,time.minute,time.second);
       }
       return(totShowers);
 
