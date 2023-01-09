@@ -17,7 +17,8 @@ Once a shower has been detected/assumed finished, the "current" readings are mov
 
 ![image](https://user-images.githubusercontent.com/8531428/211408135-4361e846-900c-4552-8ee0-ccd52b9efe2e.png)
 
-
 The shower head is this one: https://info.oras.com/en/oras-hydractiva-digital
 
+In the yaml file, you will have to set the right MAC address of your shower head (in the ble_client section).
 
+If you have difficulties finding the MAC address, try to enable DEBUG logging - then it will show whatever BLE devices, that is found with the name "DHS", and the corresponding Service UID (used in line 322)
