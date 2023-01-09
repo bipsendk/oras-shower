@@ -15,6 +15,9 @@ Sensor output (example):
 
 Once a shower has been detected/assumed finished, the "current" readings are moved to the "last" readings, and the "current" are reset to "Unknown" (until next shower starts).
 
+![image](https://user-images.githubusercontent.com/8531428/211408135-4361e846-900c-4552-8ee0-ccd52b9efe2e.png)
+
+
 The shower head is this one: https://info.oras.com/en/oras-hydractiva-digital
 
 
