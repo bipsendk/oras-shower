@@ -21,4 +21,4 @@ The shower head is this one: https://info.oras.com/en/oras-hydractiva-digital
 
 In the yaml file, you will have to set the right MAC address of your shower head (in the ble_client section).
 
-If you have difficulties finding the MAC address, try to enable DEBUG logging - then it will show whatever BLE devices, that is found with the name "DHS", and the corresponding Service UID (used in line 322)
+If you have difficulties finding the MAC address, try to enable DEBUG logging - then it will show whatever BLE devices, that is found with the name "DHS", and the associated Service UUID (used in line 322)
