@@ -1,5 +1,5 @@
   - sensor:
-    - name: 'dsh_lastshowerkwh_f'
+    - unique_id: 'dsh_lastshowerkwh_f'
       state: >
         {% if states('sensor.dsh_lastshowerkwh') not in ['unavailable','unknown'] %}
           {{ states('sensor.dsh_lastshowerkwh') }}
@@ -10,7 +10,7 @@
       unit_of_measurement: "kWh"
 
   - sensor:
-    - name: 'dsh_lastshowertemp_f'
+    - unique_id: 'dsh_lastshowertemp_f'
       state: >
         {% if states('sensor.dsh_lastshowertemp') not in ['unavailable','unknown'] %}
           {{ states('sensor.dsh_lastshowertemp') }}
@@ -21,7 +21,7 @@
       unit_of_measurement: "°C"
 
   - sensor:
-    - name: 'dsh_lastdurationseconds_f'
+    - unique_id: 'dsh_lastdurationseconds_f'
       state: >
         {% if states('sensor.dsh_lastdurationseconds') not in ['unavailable','unknown'] %}
           {{ states('sensor.dsh_lastdurationseconds') }}
@@ -31,7 +31,7 @@
       unit_of_measurement: "s"
 
   - sensor:
-    - name: 'dsh_lastshowerliter_f'
+    - unique_id: 'sensor.dsh_lastshowerliter_f'
       state: >
         {% if states('sensor.dsh_lastshowerliter') not in ['unavailable','unknown'] %}
           {{ states('sensor.dsh_lastshowerliter') }}
@@ -42,7 +42,7 @@
       unit_of_measurement: "L"
 
   - sensor:
-    - name: 'dsh_lastshowerm3_f'
+    - unique_id: 'dsh_lastshowerm3_f'
       state: >
         {% if states('sensor.dsh_lastshowerm3') not in ['unavailable','unknown'] %}
           {{ states('sensor.dsh_lastshowerm3') }}
@@ -53,16 +53,17 @@
       unit_of_measurement: "m³"
 
   - sensor:
-    - name: 'dsh_lastshowerfinished_f'
+    - unique_id: 'dsh_lastshowerfinished_f'
       state: >
         {% if states('sensor.dsh_lastshowerfinished') not in ['unavailable','unknown'] %}
           {{ states('sensor.dsh_lastshowerfinished') }}
         {% else %}
           {{ this.state }}
         {% endif %}
-
+      icon: 'mdi:timer'
+      
   - binary_sensor:
-    - name: 'dsh_showeroccupied_f'
+    - unique_id: 'dsh_showeroccupied_f'
       state: >
         {% if states('binary_sensor.dsh_showeroccupied') not in ['unavailable','unknown'] %}
           {{ states('binary_sensor.dsh_showeroccupied') }}
