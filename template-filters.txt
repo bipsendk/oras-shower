@@ -1,0 +1,73 @@
+  - sensor:
+    - name: 'dsh_lastshowerkwh_f'
+      state: >
+        {% if states('sensor.dsh_lastshowerkwh') not in ['unavailable','unknown'] %}
+          {{ states('sensor.dsh_lastshowerkwh') }}
+        {% else %}
+          {{ this.state }}
+        {% endif %}
+      device_class: energy
+      unit_of_measurement: "kWh"
+
+  - sensor:
+    - name: 'dsh_lastshowertemp_f'
+      state: >
+        {% if states('sensor.dsh_lastshowertemp') not in ['unavailable','unknown'] %}
+          {{ states('sensor.dsh_lastshowertemp') }}
+        {% else %}
+          {{ this.state }}
+        {% endif %}
+      device_class: temperature
+      unit_of_measurement: "°C"
+
+  - sensor:
+    - name: 'dsh_lastdurationseconds_f'
+      state: >
+        {% if states('sensor.dsh_lastdurationseconds') not in ['unavailable','unknown'] %}
+          {{ states('sensor.dsh_lastdurationseconds') }}
+        {% else %}
+          {{ this.state }}
+        {% endif %}
+      unit_of_measurement: "s"
+
+  - sensor:
+    - name: 'dsh_lastshowerliter_f'
+      state: >
+        {% if states('sensor.dsh_lastshowerliter') not in ['unavailable','unknown'] %}
+          {{ states('sensor.dsh_lastshowerliter') }}
+        {% else %}
+          {{ this.state }}
+        {% endif %}
+      device_class: water
+      unit_of_measurement: "L"
+
+  - sensor:
+    - name: 'dsh_lastshowerm3_f'
+      state: >
+        {% if states('sensor.dsh_lastshowerm3') not in ['unavailable','unknown'] %}
+          {{ states('sensor.dsh_lastshowerm3') }}
+        {% else %}
+          {{ this.state }}
+        {% endif %}
+      device_class: water
+      unit_of_measurement: "m³"
+
+  - sensor:
+    - name: 'dsh_lastshowerfinished_f'
+      state: >
+        {% if states('sensor.dsh_lastshowerfinished') not in ['unavailable','unknown'] %}
+          {{ states('sensor.dsh_lastshowerfinished') }}
+        {% else %}
+          {{ this.state }}
+        {% endif %}
+
+  - binary_sensor:
+    - name: 'dsh_showeroccupied_f'
+      state: >
+        {% if states('binary_sensor.dsh_showeroccupied') not in ['unavailable','unknown'] %}
+          {{ states('binary_sensor.dsh_showeroccupied') }}
+        {% else %}
+          {{ this.state }}
+        {% endif %}
+      device_class: occupancy
+      icon: 'mdi:shower-head'
