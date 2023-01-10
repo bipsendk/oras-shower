@@ -23,4 +23,4 @@ In the yaml file, you will have to set the right MAC address of your shower head
 
 If you have difficulties finding the MAC address, try to enable DEBUG logging - then it will show whatever BLE devices, that is found with the name "DHS", and the associated Service UUID (used in line 322)
 
-If you don't want the "last" senssors to go in state unknown or unavailable if the ESP device reboots or similar, you need to filter the appropriate sensors - for example by adding the content from template-filters.txt to the "templlate:" section of your configuration.yaml file.
+If you don't want the "last" sensors to go in state unknown or unavailable if the ESP device reboots or similar, you need to filter the appropriate sensors - for example by adding the content from template-filters.txt to the "template:" section of your configuration.yaml file.
