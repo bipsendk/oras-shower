@@ -322,11 +322,6 @@ sensor:
     service_uuid: '7f402200-504f-4c41-5261-6d706869726f'        # Not sure if these are the same on all shower heads - as I only have a single showerhead
     characteristic_uuid: '7f402203-504f-4c41-5261-6d706869726f' #
     notify: true  # Enable notifications on the service/charateristic
-    on_notify: 
-       then:
-        lambda: |-
-          // `x` is only a single byte here :(
-          ESP_LOGD("DSH", "Client lambda got notify");
 
     lambda: |-
       auto time = id(homeassistant_time).now();        // Get current time
