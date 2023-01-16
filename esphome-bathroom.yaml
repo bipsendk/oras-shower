@@ -35,10 +35,20 @@ wifi:
 
 captive_portal:
 
+web_server:
+  port: 80
+  ota: false
+  include_internal: true
+
 # Time component is needed for time calculations
 time:
   - platform: homeassistant
     id: homeassistant_time
+
+# Uncomment if syslogging is used
+#syslog:
+#    ip_address: "192.168.1.25"
+#    port: 514
 
 
 # Sensors for ESP version and WIFI information
@@ -109,6 +119,7 @@ esp32_ble_tracker:
                 unsigned long int bathTemp =  data.data[11];         // Temperature consist of index 11 in the array
                 unsigned long int bathKwhDec= data.data[13];         // kWh consumptionm consist of index 12 and 13 in the array (multiplied by 100)
                 unsigned long int bathLiter =  data.data[9];         // L consumptionm consist of index 8 and 9 in the array (multiplied by 100)
+                unsigned int iShowerDuration = data.data[7];         // idx 6+7 = shower time 
 
                 dsh.tStartTime = time.timestamp;  // Set start time of shower
                 ESP_LOGW("DSH_tracker", "Initializing start time to: %ld and setting occupancy on",time.timestamp);
@@ -121,6 +132,9 @@ esp32_ble_tracker:
                 dsh.curEnergy = (float)bathKwhDec/100;
                 bathLiter += ( data.data[8]<<8);                    // Get amount of water (16 bit number) - number must be divided by 10
                 dsh.curWaterLiters = float(bathLiter)/10;
+                iShowerDuration += ( data.data[6]<<8);              // Get data for shower time (16 bit number)
+                dsh.curShowerFlowDuration = iShowerDuration;
+
                 if(memcmp(&dsh.bleData[0],&data.data[0],18)!=0) {   // If BLE data is different than what we have in the "cache", copy the new data
                   memcpy(&dsh.bleData[0],&data.data[0],18);     
                 }
@@ -152,17 +166,21 @@ interval:
             id(dsh_lastDurationSeconds).publish_state(showerDurationSecs);
             id(dsh_showerOccupied).publish_state(dsh.occupancy);
             id(dsh_lastShowerFinished).publish_state(dsh.szLastShowerEnded);
+            id(dsh_lastShowerWaterFlowTime).publish_state(dsh.curShowerFlowDuration);
+
             // Update internal variables for historical lookup
             dsh.lastWaterLiters=dsh.curWaterLiters;
             dsh.lastEnergy=dsh.curEnergy;
             dsh.lastBathTemp=dsh.curBathTemp;
             dsh.lastShowerDuration=showerDurationSecs;
+            dsh.lastShowerFlowDuration = dsh.curShowerFlowDuration;
             // Set CurrentShower to NaN - as shower is inactive
             id(dsh_curShowerkWh).publish_state(NAN); 
             id(dsh_curShowerTemp).publish_state(NAN);
             id(dsh_curShowerLiter).publish_state(NAN);
             id(dsh_curShowerM3).publish_state(NAN);
             id(dsh_curShowerTimeSeconds).publish_state(NAN);
+            id(dsh_curShowerWaterFlowTime).publish_state(NAN);
 
             // Reset internal counters and data
             ESP_LOGI("DSH", "Consider shower to be finished and reset Occupancy");
@@ -180,6 +198,7 @@ interval:
             id(dsh_curShowerTimeSeconds).publish_state(showerDurationSecs);
             id(dsh_showerOccupied).publish_state(dsh.occupancy);
             id(dsh_totShowers).publish_state(dsh.lCurrentShowerNo);
+            id(dsh_lastShowerWaterFlowTime).publish_state(dsh.curShowerFlowDuration);
           }
 
 
@@ -209,6 +228,11 @@ binary_sensor:
     device_class: occupancy
 
 sensor:
+  - platform: uptime
+    name: Uptime Sensor
+    id: dsh_uptime
+    internal: true
+
   # Total number of showers registered by the shower-head 
   - platform: template
     name: "dsh_totShowers"
@@ -244,8 +268,9 @@ sensor:
     accuracy_decimals: 2
     unit_of_measurement: "kWh"
     update_interval: never
+    state_class: total_increasing
 
-  # Current energy usage in kwH
+  # Previous energy usage in kwH
   - platform: template
     name: "dsh_lastShowerkWh"
     id: dsh_lastShowerkWh
@@ -271,6 +296,22 @@ sensor:
     unit_of_measurement: "s"
     update_interval: never
 
+  # Duration timer from shower head
+  - platform: template
+    name: "dsh_curShowerWaterFlowTime"
+    id: dsh_curShowerWaterFlowTime
+    icon: 'mdi:timer'
+    unit_of_measurement: "s"
+    update_interval: never
+
+  # Last duration timer from shower head
+  - platform: template
+    name: "dsh_lastShowerWaterFlowTime"
+    id: dsh_lastShowerWaterFlowTime
+    icon: 'mdi:timer'
+    unit_of_measurement: "s"
+    update_interval: never
+
   # Current water consumption in Liter
   - platform: template
     name: "dsh_curShowerLiter"
@@ -280,6 +321,7 @@ sensor:
     unit_of_measurement: "L"
     accuracy_decimals: 1
     update_interval: never
+    state_class: total_increasing
 
   # Last water consumption in Liter
   - platform: template
@@ -300,8 +342,9 @@ sensor:
     unit_of_measurement: "m³"
     accuracy_decimals: 5
     update_interval: never
+    state_class: total_increasing
 
-  # Last water consumption in m³
+  # Previous water consumption in m³
   - platform: template
     name: "dsh_lastShowerM3"
     id: dsh_lastShowerM3
@@ -322,7 +365,6 @@ sensor:
     service_uuid: '7f402200-504f-4c41-5261-6d706869726f'        # Not sure if these are the same on all shower heads - as I only have a single showerhead
     characteristic_uuid: '7f402203-504f-4c41-5261-6d706869726f' #
     notify: true  # Enable notifications on the service/charateristic
-
     lambda: |-
       auto time = id(homeassistant_time).now();        // Get current time
       time_t currTime = time.timestamp;                // Struct to generate human readable date/timestamp
@@ -335,6 +377,7 @@ sensor:
       unsigned long int bathTemp =  pdata[11];         // Temperature consist of index 11 in the array
       unsigned long int bathKwhDec= pdata[13];         // kWh consumptionm consist of index 12 and 13 in the array (multiplied by 100)
       unsigned long int bathLiter =  pdata[9];         // L consumptionm consist of index 8 and 9 in the array (multiplied by 10)
+      unsigned int iShowerFlowDuration = pdata[7];         // idx 6+7 = shower time 
 
       totShowers += ( pdata[1]<<8);
       // ESP_LOGD("ble_adv", "Total showers %ld", totShowers);
@@ -350,6 +393,7 @@ sensor:
         id(dsh_curShowerLiter).publish_state(0);
         id(dsh_curShowerM3).publish_state(0);
         id(dsh_curShowerTimeSeconds).publish_state(0);
+        id(dsh_curShowerWaterFlowTime).publish_state(0);
         memset(&dsh.bleData[0],0,sizeof(dsh.bleData));        // Zeroize data block buffer
         dsh.occupancy = 1;                                    // Set shower as active/occupied
         id(dsh_showerOccupied).publish_state(dsh.occupancy);  // Publish sensor to HA
@@ -365,6 +409,9 @@ sensor:
       bathLiter += ( pdata[8]<<8);
       dsh.curWaterLiters = float(bathLiter)/10;
       // ESP_LOGD("ble_adv", "Bath water consumption %f L", dsh.curWaterLiters);
+
+      iShowerFlowDuration += ( pdata[6]<<8);              // Get data for shower time (16 bit number)
+      dsh.curShowerFlowDuration = iShowerFlowDuration;
 
       // Find out if data has changed compared to previous notification
       if(memcmp(&dsh.bleData[0],pdata,18)!=0) {
