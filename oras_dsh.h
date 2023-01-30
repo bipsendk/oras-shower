@@ -24,7 +24,7 @@ class DSH {
 
     unsigned long lastShowerDuration=0;
 
-    boolean occupancy=0;
+    bool occupancy=0;
 
     uint8_t bleData[20];
 
